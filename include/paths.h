@@ -1,11 +1,6 @@
 #ifndef _PATHS_H_
 #define	_PATHS_H_
 
-/* BEGIN_DECLS */
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /**
  * Why the whimsical "fixpre"? Unfortunately, "prefix" is too common a word,
  * and while macros only affect specific translation units, symbols must be
@@ -14,20 +9,29 @@ extern "C" {
  * Also, it's an acronym for "fix prefix", which is what libprefix is written to do.
  */
 
+/* BEGIN_DECLS */
+#ifdef __cplusplus
+#include <string>
+extern "C" {
+#endif
+
 /**
  * Special path request flags. The list may be expanded over time, but
  * there will always be enough free bits to accommodate the path family.
  */
 enum fixpre_path_modifiers {
     fixpre_path_modifiers__profile_dir = (1 << 31), /* per-user; flips sign */
-    fixpre_path_modifiers__native_dsep = (1 << 30), /* '\\' instead of '/' */
-    fixpre_path_modifiers__native_psep = (1 << 29), /* ';' instead of ':' */
+    fixpre_path_modifiers__cfgfile_dir = (1 << 30),
+    /* a couple of reserved bits to indicate custom path semantic */
+    fixpre_path_modifiers__native_dsep = (1 << 27), /* '\\' instead of '/' */
+    fixpre_path_modifiers__native_psep = (1 << 26), /* ';' instead of ':' */
+    /* a couple of reserved bits to indicate custom path format */
 };
 
 /**
  * A bitwise 'or' of the modifiers above, with a generous reservation.
  */
-#define _PREFIX_PATH_TUNING_MASK 0x7F000000
+#define _PREFIX_PATH_TUNING_MASK 0xFF000000
 
 #define _PREFIX_PATH_MEMBER_BITS 16
 #define _PREFIX_PATH_MEMBER_MASK ((1 << _PREFIX_PATH_MEMBER_BITS) - 1)
@@ -53,6 +57,12 @@ enum fixpre_path_families {
 /**
  * Well-known paths within (real or simulated) sysroot. RELATIVE.
  * Obvious #ifndef..#endif spaghetti for user-injected overrides.
+ * 
+ * The Windows convention (the one MXE respects) is that loadable
+ * images, whether *.exe or *.dll, are placed in "bin", and "lib"
+ * only contains static and/or import libraries consumed at build
+ * time. This saves a lot of space (in case of static libraries),
+ * and also simplifies the composition of %PATH%.
  */
 #ifndef _SUFFIX_PATH_BIN
 #define _SUFFIX_PATH_BIN        "bin/"
@@ -130,6 +140,14 @@ enum fixpre_path_families {
 #endif
 
 /**
+ * Installation path of `libprefix` within the simulated root.
+ * You typically don't need to change that.
+ */
+#ifndef _SUFFIX_PATH_PRE
+#define _SUFFIX_PATH_PRE _SUFFIX_PATH_BIN
+#endif
+
+/**
  * Now the zoo.
  */
 enum fixpre_known_path {
@@ -147,19 +165,24 @@ enum fixpre_known_path {
  * where most packages are installed vs. "debug" where the AUT is staged).
  * 
  * Despite bit separation, flags below represent complete, self-contained
- * policies representing distinct use cases. (Combine if you feel lucky.)
+ * policies representing distinct use cases. (Exceptions are documented.)
  */
 enum fixpre_config_options {
     /**
      * Default mode: libprefix uses its own symbols to identify the canary
      * binary (DLL or EXE) image it is linked into, locates the image file
      * within the file system, checks whether it is placed under some "bin"
-     * (more precisely, _SUFFIX_PATH_BIN) directory, and if it is, assumes
-     * the base directory of the _SUFFIX_PATH_BIN relative path to be the
+     * (more precisely, _SUFFIX_PATH_PRE) directory, and if it is, assumes
+     * the base directory of the _SUFFIX_PATH_PRE relative path to be the
      * simulated root. (The difference from simply choosing the parent dir
-     * is that if _SUFFIX_PATH_BIN contains multiple path elements -- e.g.
+     * is that if _SUFFIX_PATH_PRE contains multiple path elements -- e.g.
      * "my/bin/" -- the parent of "my", rather than that of "bin", becomes
      * the assumed sysroot.)
+     * 
+     * _SUFFIX_PATH_PRE can be different from _SUFFIX_PATH_BIN. This is to
+     * support a scenario in which `libprefix` is placed outside the "bin"
+     * directory, but _PATH_BIN should still return the stock "bin". As a
+     * distro maintainer, you probably don't need it, but who knows.
      * 
      * If the canary binary logic fails but there is a logged-in user with
      * a valid profile (%USERPROFILE% or %HOMEDRIVE%HOMEPATH%), the user's
@@ -227,11 +250,22 @@ enum fixpre_config_options {
      * without installation.
      */
     fixpre_config_options__tmp_dir_as_sysroot = (1 << 6),
+
+    /* Modifier ("tuning") flags. Can be combined with the options above. */
+
+    /**
+     * Don't set the %HOME% environment variable during initialization.
+     * By default, it is done for convenience, and only of %HOME% isn't already
+     * set. The value is not exported, i.e. only affects the running process and
+     * its children and does not persist in the parent process (e.g. the shell).
+     */
+    fixpre_config_options__tuning_noninvasive = (1 << 31),
 };
 
 /**
  * Custom path resolution options. Call before any call to fixpre_path(), or never.
  * If called multiple times, only the argument passed to the last call applies.
+ * If the value has already been put to use, returns -1 and sets `errno` to EBUSY.
  */
 int fixpre_configure(enum fixpre_config_options options);
 
@@ -259,14 +293,30 @@ const char* fixpre_path(enum fixpre_known_path, const char* suffix);
 
 /**
  * Returns the user profile path or an empty string if the path cannot be determined.
- * In case of success and if the argument is nonzero, also sets the HOME environment
- * variable for the process and its children accordingly.
  */
-const char* fixpre_userprofile(int nix_compat);
+const char* fixpre_userprofile();
 
 /* END_DECLS */
 #ifdef __cplusplus
 }
+
+/**
+ * Bonus C++ API (better memory management, only that and nothing more)
+ */
+namespace fixpre
+{
+
+/**
+ * See `fixpre_path`
+ */
+std::string Path(enum fixpre_known_path, const std::string& suffix);
+
+/**
+ * See `fixpre_userprofile`
+ */
+std::string UserProfile();
+
+} // namespace fixpre
 #endif
 
 #endif // _PATHS_H_

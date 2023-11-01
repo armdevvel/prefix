@@ -13,7 +13,7 @@ lib = shared_library('prefix',
     lib_files,
     include_directories: ['include', 'src'],
     install: true
-) # MOREINFO link_args: ['-lfatctl'], ?
+)
 
 subdir('samples')
 
