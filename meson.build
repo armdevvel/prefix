@@ -17,7 +17,7 @@ lib = shared_library('prefix',
 
 subdir('samples')
 
-executable('familiarize',
+executable('fami',
     test_files,
     include_directories: ['include', 'src'],
     link_with: [lib],

@@ -20,22 +20,32 @@ extern "C" {
  * there will always be enough free bits to accommodate the path family.
  */
 enum fixpre_path_modifiers {
+    /**
+     * All four combinations of profile_dir and cfgfile_dir are possible:
+     * <pro: 0, cfg: 0>  => global installation folder; known OS location
+     * <pro: 0, cfg: 1>  => global configuration folder ("/etc/ssh")
+     * <pro: 1, cfg: 0>  => per-user installation or data
+     * <pro: 1, cfg: 1>  => per-user configuration folder ("~/.ssh")
+     */
     fixpre_path_modifiers__profile_dir = (1 << 31), /* per-user; flips sign */
     fixpre_path_modifiers__cfgfile_dir = (1 << 30),
-    /* a couple of reserved bits to indicate custom path semantic */
+    /* ...a couple of reserved bits to indicate custom path semantic */
+
     fixpre_path_modifiers__native_dsep = (1 << 27), /* '\\' instead of '/' */
     fixpre_path_modifiers__native_psep = (1 << 26), /* ';' instead of ':' */
-    /* a couple of reserved bits to indicate custom path format */
+    /* ...a couple of reserved bits to indicate custom path format */
 };
 
 /**
  * A bitwise 'or' of the modifiers above, with a generous reservation.
  */
-#define _PREFIX_PATH_TUNING_MASK 0xFF000000
+#define _PREFIX_PATH_USRCFG_MASK (0xf0 << 24)
+#define _PREFIX_PATH_FORMAT_MASK (0x0f << 24)
+#define _PREFIX_PATH_TUNING_MASK (_PREFIX_PATH_USRCFG_MASK | _PREFIX_PATH_FORMAT_MASK)
 
-#define _PREFIX_PATH_MEMBER_BITS 16
+#define _PREFIX_PATH_MEMBER_BITS 12
 #define _PREFIX_PATH_MEMBER_MASK ((1 << _PREFIX_PATH_MEMBER_BITS) - 1)
-#define _PREFIX_PATH_FAMILY_MASK (~(_PREFIX_PATH_MEMBER_MASK | _PREFIX_PATH_CUSTOM_MASK))
+#define _PREFIX_PATH_FAMILY_MASK (~(_PREFIX_PATH_MEMBER_MASK | _PREFIX_PATH_TUNING_MASK))
 
 enum fixpre_path_families {
     /* Executable and dynamic library lookup paths, i.e. PATH. */
@@ -53,6 +63,9 @@ enum fixpre_path_families {
     /* Pipe name prefices of simulated /sys, /proc, etc. */
     fixpre_path_families__proc_fs = 4 << _PREFIX_PATH_MEMBER_BITS,
 };
+
+#define _PREFIX_PATH_IS_PATHLIST(req) \
+    ((req & _PREFIX_PATH_FAMILY_MASK) == fixpre_path_families__binpath)
 
 /**
  * Well-known paths within (real or simulated) sysroot. RELATIVE.
@@ -147,14 +160,41 @@ enum fixpre_path_families {
 #define _SUFFIX_PATH_PRE _SUFFIX_PATH_BIN
 #endif
 
+/* Well-known Windows paths. Never localized and can safely be hardcoded. */
+
+#ifndef _SUFFIX_PATH_SYSTEM32
+#define _SUFFIX_PATH_SYSTEM32       "System32"
+#endif
+
+#ifndef _SUFFIX_PATH_SYSWOW64
+#define _SUFFIX_PATH_SYSWOW64       "SysWOW64"
+#endif
+
 /**
- * Now the zoo.
+ * Now the zoo. Options that differ from each other only by a fixed suffix
+ * or modifier flags NEED NOT BE SPECIFIED. Only custom runtime logic that
+ * cannot be expressed with modifier flags matters.
+ * (Reading of known environment variables, however, _is_ custom logic and
+ * the implementation must be given the freedom to replace it silently.)
  */
 enum fixpre_known_path {
     fixpre_known_path__defpath = fixpre_path_families__binpath,
     fixpre_known_path__stdpath,
+
+    fixpre_known_path__windows = fixpre_path_families__windows,
+    fixpre_known_path__c_shell,  /* %ComSpec% */
+    fixpre_known_path__dot_net,
+    fixpre_known_path__datadir,  /* AppData\Local or ProgramData */
+    fixpre_known_path__roaming,  /* AppData\Roaming folder, i.e. %APPDATA% */
+    fixpre_known_path__homedir,  /* profile ? %USERPROFILE% : %PUBLIC% */
+    fixpre_known_path__pub_dir,  /* */
+    fixpre_known_path__tmp_dir,
+
     fixpre_known_path__devnull = fixpre_path_families__devices,
     fixpre_known_path__tty,
+
+    fixpre_known_path__sysroot = fixpre_path_families__sysroot,
+    fixpre_known_path__pipe_fs = fixpre_path_families__proc_fs,
 };
 
 /**
@@ -259,7 +299,10 @@ enum fixpre_config_options {
      * set. The value is not exported, i.e. only affects the running process and
      * its children and does not persist in the parent process (e.g. the shell).
      */
-    fixpre_config_options__tuning_noninvasive = (1 << 31),
+    fixpre_config_options__tuning_noninvasive = (1 << 30),
+
+    /* reserved */
+    fixpre_config_options__reserved_upper_bit = (1 << 31),
 };
 
 /**
@@ -274,7 +317,7 @@ int fixpre_configure(enum fixpre_config_options options);
  * It is NOT the caller's responsibility to free returned memory; designing otherwise
  * would destroy compatibility with macros normally expected to be literal strings.
  */
-const char* fixpre_path(enum fixpre_known_path, const char* suffix);
+const char* fixpre_path(enum fixpre_known_path path_kind, const char* suffix);
 
 /**
  * Toybox uses: _PATH_DEFPATH (all around), _PATH_UTMP (getty); hardcodes _PATH_KLOG.
@@ -291,11 +334,6 @@ const char* fixpre_path(enum fixpre_known_path, const char* suffix);
 //_PATH_*
 // ...
 
-/**
- * Returns the user profile path or an empty string if the path cannot be determined.
- */
-const char* fixpre_userprofile();
-
 /* END_DECLS */
 #ifdef __cplusplus
 }
@@ -306,15 +344,8 @@ const char* fixpre_userprofile();
 namespace fixpre
 {
 
-/**
- * See `fixpre_path`
- */
-std::string Path(enum fixpre_known_path, const std::string& suffix);
-
-/**
- * See `fixpre_userprofile`
- */
-std::string UserProfile();
+/** See `fixpre_path` */
+std::string Path(enum fixpre_known_path path_kind, const std::string& suffix);
 
 } // namespace fixpre
 #endif
