@@ -126,12 +126,13 @@ struct PathCache {
         transliterate(out, ';', ':');
         transliterate(out, '\\', '/');
         if(fixpre_file_type(path_kind) == S_IFDIR) {
-            ensure_trailing(out, '/');
+            ensure_trailing(out, '/'); // MOREINFO doesn't work w/TEMP?
         }
         if(kind == fixpre_known_path__etcroot) {
             if(fixpre_config_options__profile_as_etchome & options) {
                 out.push_back('.'); // produces e.g. "$HOME/.ssh"
             } else {
+                //_PREFIX_LOG("Append etc/ to: %s", out.c_str());
                 out.append(_SUFFIX_PATH_ETC); // "$PREFIX/etc/ssh"
             }
         }
@@ -140,11 +141,13 @@ struct PathCache {
 
     /* always under singleton lock and within constructor */
     const std::string& must_exist(int path_kind) const {
+        //_PREFIX_LOG("must exist: %08x", path_kind);
         return _impl.at({path_kind, {}}); // assertion within
     }
 
     /* always under singleton lock and within constructor */
     const std::string& mbexisting(int path_kind) const {
+        //_PREFIX_LOG("need exist: %08x", path_kind);
         auto itr = _impl.find({path_kind, {}});
         return (itr != _impl.end()) ? itr->second : kUndefined;
     }

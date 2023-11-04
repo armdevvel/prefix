@@ -221,7 +221,7 @@ enum fixpre_config_options {
     /**
      * Default mode: libprefix uses its own symbols to identify the canary
      * binary (DLL or EXE) image it is linked into, locates the image file
-     * within the file system, checks whether it is placed under some "bin"
+     * within the file system, checks whether it is placed under the "bin"
      * (more precisely, _SUFFIX_PATH_PRE) directory, and if it is, assumes
      * the base directory of the _SUFFIX_PATH_PRE relative path to be the
      * simulated root. (The difference from simply choosing the parent dir

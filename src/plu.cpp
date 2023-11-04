@@ -3,9 +3,11 @@
 #include <windows.h>
 #include <shlwapi.h>
 #include <shlobj.h>
+#include <psapi.h>
 
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <assert.h>
 #if __has_include(<fatctl/mode.h>)
 #include <fatctl/mode.h>
 #endif
@@ -85,6 +87,8 @@ std::string RequestVarLen(TryRequestVarLen try_request_varlen) {
         // request complete data
         try_request_varlen(&out[0], out.size());
     }
+    std::size_t str_len = strlen(out.data());
+    if(str_len < out_len) out.resize(str_len);
     return out;
 }
 
@@ -103,6 +107,83 @@ std::string ExpandEnvvars(const char * percent_str) {
         return ExpandEnvironmentStringsA(percent_str, buffer, limit);
     });
 }
+
+void ToDirname(std::string& modpath) {
+    std::size_t dirseppos = modpath.rfind('\\');
+    if(std::string::npos != dirseppos) { // true
+        modpath.resize(dirseppos);
+    }
+}
+
+bool ToDriveLtr_ViaShortPath(std::string& modpath) {
+    // we may want to ask whether AreShortNamesEnabled beforehand...
+     std::string path8_3 = RequestVarLen([&](char* buf, std::size_t len) {
+        return (std::size_t) GetShortPathNameA(modpath.c_str(), buf, len);
+    });
+    if(path8_3.size()) {
+         if(std::string::npos == path8_3.find('~')) {
+            //_PREFIX_LOG("path8_3=%s, use as is", path8_3.c_str());
+            modpath = path8_3; // this works
+        } else {
+            modpath = RequestVarLen([&](char* buf, std::size_t len) { // works too
+                return (std::size_t) GetLongPathNameA(path8_3.c_str(), buf, len);
+            });
+            //_PREFIX_LOG("lngpath=%s", modpath.c_str());
+        }
+        return true;
+    }
+    return false;
+}
+
+bool ToDriveLtr_ViaFinalPath(std::string& modpath) {
+    // https://stackoverflow.com/questions/48320430/convert-from-windows-nt-device-path-to-drive-letter-path
+    std::string glbpath = "\\\\?\\GLOBALROOT"; glbpath += modpath;
+    HANDLE mod = CreateFileA(glbpath.c_str(), GENERIC_READ, FILE_SHARE_VALID_FLAGS, NULL, OPEN_EXISTING, 0, NULL);
+    if(INVALID_HANDLE_VALUE != mod) { // method 3 works
+        std::string finpath = RequestVarLen([mod](char* buf, std::size_t len) {
+            return (std::size_t) GetFinalPathNameByHandleA(mod, buf, len, VOLUME_NAME_DOS|FILE_NAME_NORMALIZED);
+        });
+        CloseHandle(mod);
+        if(strncmp(finpath.c_str(), "\\\\?\\", 4)) {
+            modpath = finpath;
+        } else {
+            modpath.assign(finpath.begin() + 4, finpath.end());
+        }
+        //_PREFIX_LOG("finpath=%s", modpath.c_str());
+        return true;
+    }
+    return false;
+}
+
+bool ToDriveLtr_ViaDrivePath(std::string& modpath) {
+    std::string dospath = "A:";
+    char* drv_str = &dospath[0];
+    for(char drv = 'A'; drv <= 'Z'; ++drv) {
+        *drv_str = drv;
+        std::string volpath = RequestVarLen([drv_str](char* buf, std::size_t len) {
+            std::size_t char_count = QueryDosDeviceA(drv_str, buf, len);
+            return char_count ? char_count : (GetLastError() == ERROR_INSUFFICIENT_BUFFER) ? (2*len+11) : 0;
+        });
+        //_PREFIX_LOG("volpath[%lu]=%s dospath=%s", volpath.size(), volpath.c_str(), dospath.c_str());
+        if(volpath.size() && !strncasecmp(modpath.data(), volpath.data(), volpath.size())) {
+            modpath = dospath + std::string(modpath.begin() + volpath.size(), modpath.end());
+            //_PREFIX_LOG("dospath=%s", modpath.c_str());
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ToDriveLtr(std::string& modpath) {
+    assert(modpath.size());
+    // convert volume to drv:
+    return (std::string::npos != modpath.find(':'))
+        || ToDriveLtr_ViaShortPath(modpath)
+        || ToDriveLtr_ViaFinalPath(modpath)
+        || ToDriveLtr_ViaDrivePath(modpath);
+}
+
+/* end of utilities -- the business logic begins */
 
 std::string Dotnet(const std::string& win_dir) {
     HKEY key;
@@ -126,23 +207,99 @@ std::string Dotnet(const std::string& win_dir) {
     return win_dir + "Microsoft.NET/Framework";
 }
 
-std::string Sysroot(enum fixpre_config_options options, GDP get_dep)
-{
-    // hell breaks loose
-    if(fixpre_config_options__profile_as_etchome & options) {}
-    //
-    // TODO
-    return "TODO " _PREFIX_DISTRO_NAME;
-}
+static bool canary_failed = false; // tried to locate the sysroot but found no
 
-std::string Cfgroot(enum fixpre_config_options options, GDP get_dep)
+// Now the hell breaks loose. The following options affect sysroot:
+// fixpre_config_options__tmp_dir_as_sysroot (emergency, overrides all)
+// fixpre_config_options__env_var_as_sysroot (overrides all but tmp_dir)
+// fix
+// fixpre_config_options__app_dir_as_sysroot (overrides canary)
+// fixpre_config_options__app_dir_as_lib_dir (a different canary)
+std::string Sysroot(int mods, enum fixpre_config_options options, GDP get_dep)
 {
-    if(fixpre_config_options__profile_as_etchome & options) {
-        return get_dep(fixpre_known_path__homedir);
+    _PREFIX_LOG("Searching for sysroot, options=%08x", options);
+     if(fixpre_config_options__tmp_dir_as_sysroot & options) {
+        _PREFIX_LOG("Sysroot set to the temporary file directory");
+        return get_dep(mods | fixpre_known_path__tmp_dir);
+    }
+    if(fixpre_config_options__env_var_as_sysroot & options) {
+        auto envvar = ExpandEnvvars("%" _PREFIX_DISTRO_NAME "%");
+        if(envvar.size() && PathIsDirectoryA(envvar.c_str())) {
+            _PREFIX_LOG("Sysroot overridden with %%" _PREFIX_DISTRO_NAME "%%: %s",
+                envvar.c_str());
+            return envvar;
+        }
+    }
+    if(fixpre_config_options__profile_as_sysroot & options) {
+        // tempting to |=fixpre_path_modifiers__profile_dir, but let the caller decide
+        return get_dep(mods | fixpre_known_path__datadir) + _PREFIX_DISTRO_NAME;
+    }
+    const int use_main_mask = fixpre_config_options__app_dir_as_sysroot
+                            | fixpre_config_options__app_dir_as_lib_dir;
+    const bool use_main_module = use_main_mask & options;
+    std::string apppath = RequestVarLen([](char* buf, std::size_t len) {
+            return GetModuleFileNameA(NULL, buf, len);
+        });
+    ToDriveLtr(apppath);
+    // fixpre_config_options__app_dir_as_sysroot means "do not resolve sysroot"
+    if(fixpre_config_options__app_dir_as_sysroot & options) {
+        _PREFIX_LOG("Sysroot set to the app directory (request): %s", apppath.c_str());
+        ToDirname(apppath);
+        return apppath;
+    }
+    std::string modpath;
+    if(use_main_module) {
+        modpath = apppath;
     } else {
-        return get_dep(fixpre_known_path__sysroot);
+        modpath = RequestVarLen([](char* buf, std::size_t len) {
+            return (std::size_t) GetMappedFileNameA(GetCurrentProcess(), (void*)&Sysroot, buf, len);
+        });
+        ToDriveLtr(modpath);
+    }
+    // actually resolve sysroot, modifying modpath on success
+    std::string coalmine = "\\" _SUFFIX_PATH_PRE;
+    for(char& c : coalmine) { if(c=='/') c='\\'; } // inline 'tr'
+    std::size_t minepos = modpath.rfind(coalmine);
+    if(std::string::npos != minepos) {
+        modpath.resize(minepos + 1u);
+        _PREFIX_LOG("Sysroot found the vanilla way: %s", modpath.c_str());
+        return modpath;
+    } else {
+        canary_failed = true;
+        // remove basename
+        ToDirname(apppath);
+        _PREFIX_LOG("Sysroot set to the app directory (despair): %s", apppath.c_str());
+        return apppath;
     }
 }
+
+// The following options have no general effect on sysroot but affect etcroot:
+// fixpre_config_options__profile_as_etcroot (only applied in Cfgroot())
+// fixpre_config_options__profile_as_etchome (only applied in Cfgroot())
+std::string Cfgroot(int mods, enum fixpre_config_options options, GDP get_dep)
+{
+    const bool transient = fixpre_config_options__tmp_dir_as_sysroot & options;
+    const bool bare_home = fixpre_config_options__profile_as_etchome & options;
+    const bool want_home = fixpre_config_options__profile_as_etcroot & options;
+    if(bare_home && !transient) {
+        auto rv = get_dep(mods | fixpre_known_path__homedir);
+        _PREFIX_LOG("cfgroot=homedir:%s", rv.c_str());
+        return rv;
+    }
+    if(want_home || canary_failed) {
+        // same as Sysroot() under `fixpre_config_options__profile_as_sysroot`:
+        auto rv = get_dep(mods | fixpre_known_path__datadir) + _PREFIX_DISTRO_NAME;
+        _PREFIX_LOG("cfgroot=datadir:%s", rv.c_str());
+        return rv;
+    } else {
+        auto rv = get_dep(mods | fixpre_known_path__sysroot);
+        _PREFIX_LOG("cfgroot=sysroot:%s", rv.c_str());
+        return rv;
+    }
+}
+
+// The following options affect post-lookup behavior:
+// fixpre_config_options__tuning_noninvasive (does not affect lookup)
 
 } // anonymous
 
@@ -157,7 +314,8 @@ std::string OSPathLookup(int path_kind, enum fixpre_config_options options, GDP 
     // MOREINFO options MAY affect the above flags; if not, make const
 
     const bool is_separated_path = _PREFIX_PATH_IS_PATHLIST(path_kind);
-    const fixpre_known_path kind = Known(path_kind & ~_PREFIX_PATH_TUNING_MASK);
+    const fixpre_known_path kind = _PREFIX_ENUM_KNOWN_PATH(path_kind);
+    const int mods = path_kind & _PREFIX_PATH_TUNING_MASK;
 
     // See explanation in:
     // http://cvsweb.netbsd.org/bsdweb.cgi/src/include/paths.h.diff?r1=1.10&r2=1.11
@@ -193,13 +351,13 @@ std::string OSPathLookup(int path_kind, enum fixpre_config_options options, GDP 
 
         /* distro paths */
         case fixpre_known_path__sysroot:
-            return Sysroot(options, get_dep);
+            return Sysroot(mods, options, get_dep);
         case fixpre_known_path__etcroot:
-            return Cfgroot(options, get_dep);
+            return Cfgroot(mods, options, get_dep);
 
         /* lookup paths */
-        case fixpre_known_path__defpath: return "TODO _PATH_STDPATH";  /* interactivespace */
-        case fixpre_known_path__stdpath: return "TODO _PATH_STDPATH";  /* "servicespace" */
+        case fixpre_known_path__defpath: return "TODO _PATH_DEFPATH";  /* userspace */
+        case fixpre_known_path__stdpath: return "TODO _PATH_STDPATH";  /* servicespace */
 
         /* device paths */
         case fixpre_known_path__devnull: return "nul";
