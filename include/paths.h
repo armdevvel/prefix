@@ -353,7 +353,88 @@ const char* fixpre_path(int path_kind_with_optional_modifiers, const char* suffi
  * From Linux, we can adopt: _PATH_DEVNULL (nul), _PATH_TTY (con).
  * Once `toysh` is stable, it will be harmless to add: _PATH_BSHELL
  * Adding `cmd.exe` as _PATH_CSHELL will probably make a nice joke.
+ * 
+ * The most important idea of _PATH_{DEF,STD}PATH is that they are prescriptive, not
+ * informative/"approximative". You, as the distro maintainer, want them to be "such
+ * and such". We can then introduce the following notation:
+ * 
+ * 0. `_PREFIX_DISTRO_DEFPATH` and `_PREFIX_DISTRO_STDPATH` are used as templates of
+ *      actual `_PATH_DEFPATH` and `_PATH_STDPATH`.
+ * 
+ * 1. `_PREFIX_DISTRO_COMSEP` specifies the template component separator.
+ *      It's ':' by default to align with the *nix convention but can be overridden.
+ *      (To use absolute paths with drive letters, it has to be, but we do not want
+ *      to encourage absolute paths in macros as a first-class use case.)
+ * 
+ * 2. `_PREFIX_DISTRO_VARTAG` specifies the "brace" character or substring that both
+ *      begins and ends a variable name within the path component -- similar to "%"s
+ *      that mark an environment variable name within a substituted string.
+ * 
+ * 3. A variable may appear anywhere in the path template component but the trailing
+ *      part of the component MAY be interpreted in variable-specific way, rendering
+ *      the variable effectively a function. The default interpretation, however, is
+ *      simply that the trailing suffix will be appended literally.
+ * 
+ * 4. The parser expands environment variables after it splits the path template into
+ *      components and recognizes template variables. If template variable processing
+ *      leads to a registry read, REG_EXPAND_SZ values are expanded using the current
+ *      environment block, but are not subject to any further parsing; in other words
+ *      (this is another gentle nudge of ours), there's no reason to use path template
+ *      variables in values stored in the registry.
+ * 
+ * 5. The following template variables are defined:
+ * 
+ *      $HKCU$path/within/the/current/user/hive/ending/with/value/name
+ *      $HKDU$path/within/the/default/user/hive/ending/with/value/name
+ *      $HKLM$path/within/the/local/machine/hive/ending/with/value/name
+ *          (No other registry hives are explicitly supported.)
+ * 
+ *      $HKCUENV$envvar         same as $HKCU$Environment/envvar
+ *      $HKDUENV$envvar         same as $HKDU$Environment/envvar
+ *      $HKLMENV$envvar         system environment variable (%envvar%)
+ *       (there is no similarly beautiful $HKLM$ equivalent, but you got the point)
+ *                          
+ *      $HKLMPATH$              system %PATH% value (suffix ignored)
+ *      $HKCUPATH$              current user %PATH% value (-"-)
+ *      $HKDUPATH$              default user %PATH% value (-"-)
+ *          Path component splitting occurs after envvar expansion.
+ * 
+ *      $WINDIR$sub/di/rectory  same as %windir%sub/di/rectory
+ *      $SYSDIR$subdi/rector/y  same as above but relative to "System32"
+ *      $PREFIX$subdir/ecto/ry  ...but relative to the distro root
+ *      $HOME$su/b/directory    ...to the current user profile
+ *      $KNOWN${Music|Pictures|Downloads|...}/subdir
+ *          ...to a known profile folder speficied by the first suffix component.
+ *          In other words, if your locale is Spanish and Downloads is Descargas,
+ *          $KNOWN$Downloads/EGElephantSDK becomes $HOME$Descargas/EGElephantSDK.
+ *          The trailing suffix components are not localized. 
+ *          The download name used in this example is fictional.
+ * 
+ *      The variable names are case-sensitive and must be in all capitals.
+ *      (Replace the '$' character above with the effective `_PREFIX_DISTRO_VARTAG`.)
+ * 
+ * 6. Fully expanded path components that aren't absolute paths (don't start with any
+ *      drive letter or a double [back]slash) are relative to distro prefix (sysroot).
+ * 
+ * 7. Second, third etc. case- and dirsep-insensitively identical occurrences of path
+ *      components in the eventual path MAY be eliminated by the implementation.
  */
+
+#ifndef _PREFIX_DISTRO_COMSEP
+#define _PREFIX_DISTRO_COMSEP ":"
+#endif
+
+#ifndef _PREFIX_DISTRO_VARTAG
+#define _PREFIX_DISTRO_VARTAG "$"
+#endif
+
+#ifndef _PREFIX_DISTRO_DEFPATH
+#define _PREFIX_DISTRO_DEFPATH "TODO"
+#endif
+
+#ifndef _PREFIX_DISTRO_STDPATH
+#define _PREFIX_DISTRO_STDPATH "TODO"
+#endif
 
 //_PATH_*
 //_PATH_*
