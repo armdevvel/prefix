@@ -4,6 +4,7 @@ project('libprefix', 'cpp',
   )
 
 add_global_arguments('-Wno-gnu-zero-variadic-macro-arguments', language: 'cpp') ##__VA_ARGS__
+add_global_arguments('-Wno-logical-op-parentheses', language: 'cpp') # stop bowing to illiteracy
 
 subdir('_user') # specify e.g. debug flags in `meson.build` there
 

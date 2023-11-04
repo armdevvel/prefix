@@ -11,30 +11,29 @@
 #endif
 
 #include <cstdint>
-#include <string>
 #include <algorithm>
-#include <functional>
 
+#include "def.h"
 #include "dbg.h"
-
-#define Known(x) static_cast<enum fixpre_known_path>(x)
 
 extern "C"
 {
 
-int fixpre_file_type(enum fixpre_known_path path_kind) {
-    if(fixpre_known_path__c_shell == path_kind) {
+int fixpre_file_type(int path_kind) {
+    const enum fixpre_known_path kind = _PREFIX_ENUM_KNOWN_PATH(path_kind);
+    if(fixpre_known_path__c_shell == kind) {
         return S_IFREG;
     }
-    if(fixpre_path_families__devices == (path_kind & _PREFIX_PATH_FAMILY_MASK)) {
+    if(fixpre_path_families__devices == (kind & _PREFIX_PATH_FAMILY_MASK)) {
         return S_IFCHR;
     } else {
         return S_IFDIR;
     }
 }
 
-const char* fixpre_explain(enum fixpre_known_path path_kind) {
-    switch(path_kind & ~_PREFIX_PATH_TUNING_MASK) {
+const char* fixpre_explain(int path_kind) {
+    const enum fixpre_known_path kind = _PREFIX_ENUM_KNOWN_PATH(path_kind);
+    switch(kind) {
         case fixpre_known_path__windows: return "Windows installation dir";
         case fixpre_known_path__sys_dir: return "Windows system directory";
         case fixpre_known_path__c_shell: return "Command line shell (%ComSpec%)";
@@ -105,30 +104,44 @@ std::string ExpandEnvvars(const char * percent_str) {
     });
 }
 
-/**
- * "GetDependencyPath". The other reading is valid, too:
- *  -- macroeconomic regulation is a path to dependency.
- */
-using GDP = std::function<const std::string&(enum fixpre_known_path)>;
-
-std::string Dotnet() {
+std::string Dotnet(const std::string& win_dir) {
     HKEY key;
-    if(ERROR_SUCCESS == RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\.NETFramework", 0, KEY_QUERY_VALUE, &key)) {
+    DWORD err = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\.NETFramework", 0, KEY_READ, &key);
+    if(ERROR_SUCCESS == err) {
         std::string out = RequestVarLen([key](char* buf, std::size_t buflen) {
             DWORD len = buflen; // int-to-long
-            return (ERROR_SUCCESS == RegGetValueA(key, NULL, "InstallRoot", RRF_RT_REG_SZ, NULL, buf, &len)) ? len : 0;
+            DWORD err = RegGetValueA(key, NULL, "InstallRoot", RRF_RT_REG_SZ, NULL, buf, &len);
+            if(ERROR_SUCCESS == err) {
+                return (std::size_t)len;
+            } else {
+                _PREFIX_LOG("RegGetValueA: err=%lu", err);
+                return 0u;
+            }
         });
         RegCloseKey(key);
+        return out;
+    } else {
+        _PREFIX_LOG("RegOpenKeyExA: err=%lu", err);
     }
-    return {};
+    return win_dir + "Microsoft.NET/Framework";
 }
 
-std::string Sysroot(bool is_userdir, bool is_cfg_dir,
-    enum fixpre_config_options options, GDP get_dep)
+std::string Sysroot(enum fixpre_config_options options, GDP get_dep)
 {
     // hell breaks loose
+    if(fixpre_config_options__profile_as_etchome & options) {}
+    //
     // TODO
     return "TODO " _PREFIX_DISTRO_NAME;
+}
+
+std::string Cfgroot(enum fixpre_config_options options, GDP get_dep)
+{
+    if(fixpre_config_options__profile_as_etchome & options) {
+        return get_dep(fixpre_known_path__homedir);
+    } else {
+        return get_dep(fixpre_known_path__sysroot);
+    }
 }
 
 } // anonymous
@@ -137,10 +150,8 @@ std::string Sysroot(bool is_userdir, bool is_cfg_dir,
  * precondition: called in ascending order
  * postconditions: none, 'gps.cpp' undoes all format liberties
  */
-__attribute__((visibility("hidden"))) std::string OSPathLookup(
-    enum fixpre_known_path path_kind,
-    enum fixpre_config_options options, GDP get_dep)
-{
+__attribute__((visibility("hidden")))
+std::string OSPathLookup(int path_kind, enum fixpre_config_options options, GDP get_dep) {
     bool is_userdir = path_kind & fixpre_path_modifiers__profile_dir;
     bool is_cfg_dir = path_kind & fixpre_path_modifiers__cfgfile_dir;
     // MOREINFO options MAY affect the above flags; if not, make const
@@ -161,7 +172,7 @@ __attribute__((visibility("hidden"))) std::string OSPathLookup(
         case fixpre_known_path__c_shell: // /* %ComSpec% */
             return ExpandEnvvars("%ComSpec%");
         case fixpre_known_path__dot_net: // e.g. "C:\Windows\Microsoft.NET\Framework\"
-            return (path_kind == kind) ? Dotnet() : get_dep(kind);
+            return (path_kind == kind) ? Dotnet(get_dep(fixpre_known_path__windows)) : get_dep(kind);
         case fixpre_known_path__datadir: // /* AppData\Local or ProgramData */
             return RequestSpecial(is_userdir ? CSIDL_LOCAL_APPDATA : CSIDL_COMMON_APPDATA);
         case fixpre_known_path__roaming: // /* AppData\Roaming folder, i.e. %APPDATA% */
@@ -182,7 +193,9 @@ __attribute__((visibility("hidden"))) std::string OSPathLookup(
 
         /* distro paths */
         case fixpre_known_path__sysroot:
-            return Sysroot(is_userdir, is_cfg_dir, options, get_dep);
+            return Sysroot(options, get_dep);
+        case fixpre_known_path__etcroot:
+            return Cfgroot(options, get_dep);
 
         /* lookup paths */
         case fixpre_known_path__defpath: return "TODO _PATH_STDPATH";  /* interactivespace */
@@ -195,6 +208,15 @@ __attribute__((visibility("hidden"))) std::string OSPathLookup(
         /* non-fs paths */
         case fixpre_known_path__pipe_fs: return "//./pipe/";
         default: return {};
+    }
+}
+
+__attribute__((visibility("hidden")))
+void SweetHome(const std::string& home) {
+    if(home.size() && !GetEnvironmentVariableA("HOME", nullptr, 0) && GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
+        const char* c_home = home.c_str();
+        _PREFIX_LOG("set HOME=%s", c_home);
+        SetEnvironmentVariableA("HOME", c_home);
     }
 }
 

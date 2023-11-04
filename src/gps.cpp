@@ -4,9 +4,7 @@
 #include <atomic>
 #include <mutex>
 #include <map>
-#include <string>
 #include <utility>
-#include <functional>
 
 /* error handling */
 #include <exception>
@@ -17,22 +15,8 @@
 
 #include <sys/stat.h>
 
+#include "def.h"
 #include "dbg.h"
-
-#define Known(x) static_cast<enum fixpre_known_path>(x)
-
-namespace fixpre {
-namespace detail {
-
-/* don't want a header for this method alone */
-__attribute__((visibility("hidden")))
-extern std::string OSPathLookup(
-    enum fixpre_known_path path_kind,
-    enum fixpre_config_options options,
-    std::function<const std::string&(enum fixpre_known_path)> get_dep);
-
-} // namespace detail
-} // namespace fixpre
 
 namespace
 {
@@ -74,7 +58,7 @@ struct PathCache;
 
 struct PathQuery
 {
-    PathQuery(enum fixpre_known_path path_kind, std::string path_suffix, bool cache_output)
+    PathQuery(int path_kind, std::string path_suffix, bool cache_output)
         : kind(path_kind), suffix(path_suffix), _cache_output(cache_output),
             err(0), out{}, cached(nullptr) {}
 
@@ -90,7 +74,7 @@ struct PathQuery
     /* under cache instance lock, and the cache needs to be updated */
     void setResult(int error_code, const std::string& path_or_msg, PathCache& cache);
 
-    const enum fixpre_known_path kind;
+    const int kind;
     const std::string suffix;
     const bool _cache_output;
     int err;
@@ -107,7 +91,7 @@ struct PathCache {
 
     PathCache() : options(take_options()) {
 
-        _PREFIX_LOG("Constructing cache with options %08x", options);
+        _PREFIX_LOG("Constructing path cache with options %08x", options);
 
         // 1. (0xf0 << 24) modifiers change the path substantially. Therefore, do the full lookup.
         // Note - not all flags affect all families, but we do all out of an abundance of caution.
@@ -129,43 +113,49 @@ struct PathCache {
                 }
             )
         )(0);
+
+        if(!(fixpre_config_options__tuning_noninvasive & options)) {
+            SweetHome(mbexisting(fixpre_known_path__homedir | fixpre_path_modifiers__profile_dir));
+        }
     }
 
     /* always under singleton lock and within constructor */
     bool resolve_path(int path_kind) {
-        auto kind = Known(path_kind);
-        auto out = OSPathLookup(kind, options,
-            [this](enum fixpre_known_path dependency) { return mbexisting(dependency); });
+        auto out = OSPathLookup(path_kind, options, [this](int dep) { return mbexisting(dep); });
+        auto kind = _PREFIX_ENUM_KNOWN_PATH(path_kind);
         transliterate(out, ';', ':');
         transliterate(out, '\\', '/');
-        if(fixpre_file_type(kind) == S_IFDIR) {
+        if(fixpre_file_type(path_kind) == S_IFDIR) {
             ensure_trailing(out, '/');
         }
-        if((options & fixpre_config_options__profile_as_etchome) &&
-             ((kind & ~_PREFIX_PATH_TUNING_MASK) == fixpre_known_path__etcroot)) {
-            out.push_back('.'); // produces e.g. "$HOME/.ssh"
+        if(kind == fixpre_known_path__etcroot) {
+            if(fixpre_config_options__profile_as_etchome & options) {
+                out.push_back('.'); // produces e.g. "$HOME/.ssh"
+            } else {
+                out.append(_SUFFIX_PATH_ETC); // "$PREFIX/etc/ssh"
+            }
         }
-        return out.size() && set_base(kind, out) || fixpre_explain(kind);
+        return out.size() && set_base(path_kind, out) || fixpre_explain(kind);
     }
 
     /* always under singleton lock and within constructor */
-    const std::string& must_exist(enum fixpre_known_path path_kind) const {
+    const std::string& must_exist(int path_kind) const {
         return _impl.at({path_kind, {}}); // assertion within
     }
 
     /* always under singleton lock and within constructor */
-    const std::string& mbexisting(enum fixpre_known_path path_kind) const {
+    const std::string& mbexisting(int path_kind) const {
         auto itr = _impl.find({path_kind, {}});
-        return (itr == _impl.end()) ? itr->second : kUndefined;
+        return (itr != _impl.end()) ? itr->second : kUndefined;
     }
 
     /* always under lock */
-    const char* set_base(enum fixpre_known_path path_kind, const std::string& val) {
+    const char* set_base(int path_kind, const std::string& val) {
         return set_full(path_kind, {}, val);
     }
 
     /* always under lock */
-    const char* set_full(enum fixpre_known_path path_kind, const std::string& suffix, const std::string& val) {
+    const char* set_full(int path_kind, const std::string& suffix, const std::string& val) {
         auto inserted = _impl.emplace(Key{path_kind, suffix}, val);
         assert(inserted.second);
         return inserted.first->second.c_str();
@@ -218,8 +208,7 @@ private:
             } else { // D|E
                 int canflags = pq.kind & ~_PREFIX_PATH_FORMAT_MASK;
                 if(canflags != pq.kind) { // ...maybe D?
-                    PathQuery cs{Known(canflags),
-                            pq.suffix, pq._cache_output};
+                    PathQuery cs{canflags, pq.suffix, pq._cache_output};
                     lookup_locked(cs);
                     if(!(pq.err = cs.err)) { // D
                         if(pq.kind & fixpre_path_modifiers__native_dsep) {
@@ -267,7 +256,7 @@ void PathQuery::setResult(int error_code, const std::string& path_or_msg, PathCa
 namespace fixpre
 {
 
-std::string Path(enum fixpre_known_path path_kind, const std::string& suffix)
+std::string Path(int path_kind, const std::string& suffix)
 {
     PathQuery pq(path_kind, suffix, false);
     path_cache().lookup(pq);
@@ -294,10 +283,10 @@ void EnumerateKnownBasePaths(OnKnownPath callback) {
     const auto& cache = path_cache();
     // TODO: extract idiom (see also ctor of PathCache)
     int fam = 0;
-    while(fixpre_explain(Known(fam))) {
+    while(fixpre_explain(fam)) {
         int knp = fam;
         do cache.peek(knp, callback);
-        while(fixpre_explain(Known(++knp)));
+        while(fixpre_explain(++knp));
         fam += (1 << _PREFIX_PATH_MEMBER_BITS);
     }
 }
@@ -331,8 +320,8 @@ void fixpre_enumerate_cached_paths(void(*callback)(enum fixpre_known_path, const
     });
 }
 
-const char* fixpre_path(enum fixpre_known_path path_kind, const char* suffix) {
-    PathQuery pq(path_kind, suffix, true);
+const char* fixpre_path(int path_kind, const char* suffix) {
+    PathQuery pq(Known(path_kind), suffix, true);
     path_cache().lookup(pq);
     if(pq.err) {
         _PREFIX_LOG("_PATH[0x%x]/%s -> errno=%d/%s", path_kind, suffix, pq.err, pq.cached);

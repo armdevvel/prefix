@@ -17,4 +17,10 @@ int main(int argc, char** argv) {
         const char* desc = fixpre_explain(kind);
         printf("%08x: %s (%s)\n", kind, path.c_str(), desc);
     });
+
+    printf("\nModi... fire! Now the complete cache\n================\n");
+    fflush(stdout);
+    fixpre::EnumerateCachedPaths([](enum fixpre_known_path kind, const std::string& suffix, const std::string& path) {
+        printf("%08x/%s: %s\n", kind, suffix.c_str(), path.c_str());
+    });
 }

@@ -48,6 +48,8 @@ enum fixpre_path_modifiers {
 #define _PREFIX_PATH_MEMBER_MASK ((1 << _PREFIX_PATH_MEMBER_BITS) - 1)
 #define _PREFIX_PATH_FAMILY_MASK (~(_PREFIX_PATH_MEMBER_MASK | _PREFIX_PATH_TUNING_MASK))
 
+#define _PREFIX_ENUM_KNOWN_PATH(x) ((enum fixpre_known_path)(x & ~_PREFIX_PATH_TUNING_MASK))
+
 enum fixpre_path_families {
     /* Known Windows filesystem paths (Windows, default shell) */
     fixpre_path_families__windows = 0,
@@ -322,21 +324,26 @@ int fixpre_configure(enum fixpre_config_options options);
 
 /**
  * Type of the file represented by a known base path.
+ * If the file type is unknown, returns S_IFDIR.
+ * 
  */
-int fixpre_file_type(enum fixpre_known_path path_kind);
+int fixpre_file_type(int path_kind);
 
 /**
- * Describe the specific base path kind. No actual lookup is made.
+ * Describes the known path kind. No actual lookup is made.
+ * The result is not affected by modifiers.
+ * The result is nullptr if the base path kind is unknown
+ *      (can be used to test the validity of `path_kind`).
  * The returned C-string is read-only and need not be freed.
  */
-const char* fixpre_explain(enum fixpre_known_path kind);
+const char* fixpre_explain(int path_kind);
 
 /**
  * Actual path resolution function. `_PATH_*` macros contain calls to it internally.
  * It is NOT the caller's responsibility to free returned memory; designing otherwise
  * would destroy compatibility with macros normally expected to be literal strings.
  */
-const char* fixpre_path(enum fixpre_known_path path_kind, const char* suffix);
+const char* fixpre_path(int path_kind_with_optional_modifiers, const char* suffix);
 
 /**
  * Toybox uses: _PATH_DEFPATH (all around), _PATH_UTMP (getty); hardcodes _PATH_KLOG.
@@ -374,7 +381,7 @@ namespace fixpre
 {
 
 /** See `fixpre_path` */
-std::string Path(enum fixpre_known_path path_kind, const std::string& suffix);
+std::string Path(int path_kind_with_optional_modifiers, const std::string& suffix);
 
 /** See `fixpre_enumerate_known_base_paths` */
 using OnKnownPath = std::function<void(enum fixpre_known_path, const std::string& value)>;
