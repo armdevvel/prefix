@@ -12,6 +12,7 @@
 /* BEGIN_DECLS */
 #ifdef __cplusplus
 #include <string>
+#include <functional>
 extern "C" {
 #endif
 
@@ -48,17 +49,17 @@ enum fixpre_path_modifiers {
 #define _PREFIX_PATH_FAMILY_MASK (~(_PREFIX_PATH_MEMBER_MASK | _PREFIX_PATH_TUNING_MASK))
 
 enum fixpre_path_families {
-    /* Executable and dynamic library lookup paths, i.e. PATH. */
-    fixpre_path_families__binpath = 0,
-
     /* Known Windows filesystem paths (Windows, default shell) */
-    fixpre_path_families__windows = 1 << _PREFIX_PATH_MEMBER_BITS,
-
-    /* Known Windows OS devices and kernel-driven filesystems. */
-    fixpre_path_families__devices = 2 << _PREFIX_PATH_MEMBER_BITS,
+    fixpre_path_families__windows = 0,
 
     /* Known directories within simulated *nix sysroot. */
-    fixpre_path_families__sysroot = 3 << _PREFIX_PATH_MEMBER_BITS,
+    fixpre_path_families__sysroot = 1 << _PREFIX_PATH_MEMBER_BITS,
+
+    /* Executable and dynamic library lookup paths, i.e. PATH. */
+    fixpre_path_families__binpath = 2 << _PREFIX_PATH_MEMBER_BITS,
+
+    /* Known Windows OS devices and kernel-driven filesystems. */
+    fixpre_path_families__devices = 3 << _PREFIX_PATH_MEMBER_BITS,
 
     /* Pipe name prefices of simulated /sys, /proc, etc. */
     fixpre_path_families__proc_fs = 4 << _PREFIX_PATH_MEMBER_BITS,
@@ -176,24 +177,31 @@ enum fixpre_path_families {
  * cannot be expressed with modifier flags matters.
  * (Reading of known environment variables, however, _is_ custom logic and
  * the implementation must be given the freedom to replace it silently.)
+ * 
+ * The "known" paths are loaded in enumeration order;
+ *  for all the above, per-profile after non-profile;
+ *  for all the above, config (etc) after non-config.
+ * This is a hint at out logic, not a hard guarantee.
  */
 enum fixpre_known_path {
-    fixpre_known_path__defpath = fixpre_path_families__binpath,
-    fixpre_known_path__stdpath,
-
     fixpre_known_path__windows = fixpre_path_families__windows,
+    fixpre_known_path__sys_dir,
     fixpre_known_path__c_shell,  /* %ComSpec% */
     fixpre_known_path__dot_net,
+    fixpre_known_path__homedir,  /* profile ? %USERPROFILE% : %PUBLIC% */
     fixpre_known_path__datadir,  /* AppData\Local or ProgramData */
     fixpre_known_path__roaming,  /* AppData\Roaming folder, i.e. %APPDATA% */
-    fixpre_known_path__homedir,  /* profile ? %USERPROFILE% : %PUBLIC% */
-    fixpre_known_path__pub_dir,  /* */
     fixpre_known_path__tmp_dir,
+
+    fixpre_known_path__sysroot = fixpre_path_families__sysroot,
+    fixpre_known_path__etcroot,
+
+    fixpre_known_path__defpath = fixpre_path_families__binpath,
+    fixpre_known_path__stdpath,
 
     fixpre_known_path__devnull = fixpre_path_families__devices,
     fixpre_known_path__tty,
 
-    fixpre_known_path__sysroot = fixpre_path_families__sysroot,
     fixpre_known_path__pipe_fs = fixpre_path_families__proc_fs,
 };
 
@@ -313,6 +321,17 @@ enum fixpre_config_options {
 int fixpre_configure(enum fixpre_config_options options);
 
 /**
+ * Type of the file represented by a known base path.
+ */
+int fixpre_file_type(enum fixpre_known_path path_kind);
+
+/**
+ * Describe the specific base path kind. No actual lookup is made.
+ * The returned C-string is read-only and need not be freed.
+ */
+const char* fixpre_explain(enum fixpre_known_path kind);
+
+/**
  * Actual path resolution function. `_PATH_*` macros contain calls to it internally.
  * It is NOT the caller's responsibility to free returned memory; designing otherwise
  * would destroy compatibility with macros normally expected to be literal strings.
@@ -321,7 +340,7 @@ const char* fixpre_path(enum fixpre_known_path path_kind, const char* suffix);
 
 /**
  * Toybox uses: _PATH_DEFPATH (all around), _PATH_UTMP (getty); hardcodes _PATH_KLOG.
- * _PATH_STDPATH stays unused. Our policy is to query _PATH_STDPATH from the registry
+ * _PATH_STDPATH stays unused. Our policy is to query per-user path from the registry
  *   or environment and then vet (whitelist) components that gets into _PATH_DEFPATH.
  * 
  * From Linux, we can adopt: _PATH_DEVNULL (nul), _PATH_TTY (con).
@@ -333,6 +352,16 @@ const char* fixpre_path(enum fixpre_known_path path_kind, const char* suffix);
 //_PATH_*
 //_PATH_*
 // ...
+
+/**
+ * Iterate over valid `enum fixpre_known_path` numbers (w/modifiers set to 0).
+ */
+void fixpre_enumerate_known_base_paths(void(*callback)(enum fixpre_known_path, const char* value));
+
+/**
+ * Iterate over known cached paths (all of them).
+ */
+void fixpre_enumerate_cached_paths(void(*callback)(enum fixpre_known_path, const char* suffix, const char* value));
 
 /* END_DECLS */
 #ifdef __cplusplus
@@ -346,6 +375,14 @@ namespace fixpre
 
 /** See `fixpre_path` */
 std::string Path(enum fixpre_known_path path_kind, const std::string& suffix);
+
+/** See `fixpre_enumerate_known_base_paths` */
+using OnKnownPath = std::function<void(enum fixpre_known_path, const std::string& value)>;
+void EnumerateKnownBasePaths(OnKnownPath callback);
+
+/** See `fixpre_enumerate_cached_paths` */
+using OnCachedPath = std::function<void(enum fixpre_known_path, const std::string& suffix, const std::string& value)>;
+void EnumerateCachedPaths(OnCachedPath callback);
 
 } // namespace fixpre
 #endif

@@ -15,6 +15,15 @@ as application configuration is more likely to diverge between users (and needs 
 
 TODO write up a TL;DR
 
+### Limitations
+
+No Unicode support. Paths are ASCII. Related:
+* https://github.com/treeswift/libfatctl/issues/4
+
+Context:
+* https://github.com/treeswift/toybox-mingw
+* https://github.com/armdevvel/openssh-portable
+
 ## Design notes
 
 ### Relationship with [libmoregw](https://github.com/treeswift/libmoregw)

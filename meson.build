@@ -12,6 +12,7 @@ subdir('src') # library files
 lib = shared_library('prefix',
     lib_files,
     include_directories: ['include', 'src'],
+    link_args: ['-lkernel32', '-lshell32', '-ladvapi32'],
     install: true
 )
 
