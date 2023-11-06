@@ -26,4 +26,4 @@ executable('fami',
     install: true
   )
 
-install_headers('include/paths.h', subdir: 'prefix')
+install_headers('include/paths.h') # set subdir: 'prefix' for debugging
