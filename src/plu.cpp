@@ -321,17 +321,17 @@ std::string Cfgroot(int mods, enum fixpre_config_options options, GDP get_dep)
     const bool want_home = fixpre_config_options__profile_as_etcroot & options;
     if(bare_home && !transient) {
         auto rv = get_dep(mods | fixpre_known_path__homedir);
-        _PREFIX_LOG("cfgroot=homedir:%s", rv.c_str());
+        _PREFIX_LOG("cfgroot=homedir: %s", rv.c_str());
         return rv;
     }
     if(want_home || canary_failed) {
         // same as Sysroot() under `fixpre_config_options__profile_as_sysroot`:
         auto rv = get_dep(mods | fixpre_known_path__datadir) + _PREFIX_DISTRO_NAME;
-        _PREFIX_LOG("cfgroot=datadir:%s", rv.c_str());
+        _PREFIX_LOG("cfgroot=datadir: %s", rv.c_str());
         return rv;
     } else {
         auto rv = get_dep(mods | fixpre_known_path__sysroot);
-        _PREFIX_LOG("cfgroot=sysroot:%s", rv.c_str());
+        _PREFIX_LOG("cfgroot=sysroot: %s", rv.c_str());
         return rv;
     }
 }
@@ -370,8 +370,7 @@ std::string UserPath(const char* tlate, int mods, GDP get_dep) {
     if(!tlate || !*tlate) return out;
 
     std::set<std::string> uniq;
-    auto post_component = [&](const std::string& component) {
-        _PREFIX_LOG("PATH+=[%u]%s", component.size(), component.c_str());
+    auto post_component = [&out, &uniq](const std::string& component) {
         if(component.size() && uniq.emplace(component).second) {
             if(out.size()) out.push_back('\1');
             out.append(component);
@@ -390,8 +389,8 @@ std::string UserPath(const char* tlate, int mods, GDP get_dep) {
     maphive("HKDUENV", krk.HKEY_DUENV);
     maphive("HKLMENV", krk.HKEY_LMENV);
 
-    auto mappath = [&](const char* tag, HKEY henv) {
-        tagmap[tag] = [&](const std::string& ign) {
+    auto mappath = [&tagmap, post_component](const char* tag, HKEY henv) {
+        tagmap[tag] = [henv, post_component](const std::string& ign) {
             if(ign.size()) { _PREFIX_LOG("$*PATH$ suffix (%s) ignored", ign.c_str()); }
             std::string PATH = RegStr(henv, "PATH");
             std::size_t seppos, eltpos = 0;
@@ -407,7 +406,7 @@ std::string UserPath(const char* tlate, int mods, GDP get_dep) {
     mappath("HKDUPATH", krk.HKEY_DUENV);
     mappath("HKLMPATH", krk.HKEY_LMENV);
 
-    auto mappend = [&] (const char* tag, enum fixpre_known_path kind) {
+    auto mappend = [&tagmap, mods, get_dep] (const char* tag, enum fixpre_known_path kind) {
         const int path_kind = mods | kind;
         tagmap[tag] = [path_kind, get_dep](const std::string& arg) {
             return get_dep(path_kind) + arg;
@@ -418,14 +417,14 @@ std::string UserPath(const char* tlate, int mods, GDP get_dep) {
     mappend("PREFIX", fixpre_known_path__sysroot);
     mappend("HOME"  , fixpre_known_path__homedir);
 
-    std::map<std::string, std::pair<int, int>> pubpri;
-    pubpri["Documents"] = {CSIDL_COMMON_DOCUMENTS, CSIDL_MYDOCUMENTS};
-    //pubpri["Downloads"] = {CSIDL_COMMON_DOWNLOADS, CSIDL_MYDOWNLOADS}; // also Desktop?
+    std::map<std::string, std::pair<int, int>> folders;
+    folders["Documents"] = {CSIDL_COMMON_DOCUMENTS, CSIDL_MYDOCUMENTS};
+    //folders["Downloads"] = {CSIDL_COMMON_DOWNLOADS, CSIDL_MYDOWNLOADS}; // also Desktop?
     // FIXME migrate to https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid
     //  use FOLDERID_Desktop, FOLDERID_Downloads
-    pubpri["Pictures"]  = {CSIDL_COMMON_PICTURES,  CSIDL_MYPICTURES};
-    pubpri["Music"]     = {CSIDL_COMMON_MUSIC,     CSIDL_MYMUSIC};
-    pubpri["Videos"]    = {CSIDL_COMMON_VIDEO,     CSIDL_MYVIDEO};
+    folders["Pictures"]  = {CSIDL_COMMON_PICTURES,  CSIDL_MYPICTURES};
+    folders["Music"]     = {CSIDL_COMMON_MUSIC,     CSIDL_MYMUSIC};
+    folders["Videos"]    = {CSIDL_COMMON_VIDEO,     CSIDL_MYVIDEO};
 
     tagmap["KNOWN"] = [&](const std::string& arg) {
         const bool is_userdir = mods & fixpre_path_modifiers__profile_dir;
@@ -435,7 +434,7 @@ std::string UserPath(const char* tlate, int mods, GDP get_dep) {
             return tagmap.at("HOME")(arg);
         } else {
             std::string kn_name = arg.substr(slash);
-            const auto& pub_pri = pubpri.at(kn_name);
+            const auto& pub_pri = folders.at(kn_name);
             return RequestSpecial(is_userdir ? pub_pri.second : pub_pri.first) + arg.substr(slash + 1u);
         }
     };
@@ -473,7 +472,6 @@ std::string UserPath(const char* tlate, int mods, GDP get_dep) {
             }
         }
         chunk.resize(tag_endlook);
-        _PREFIX_LOG("%s+=[%u]%s", chunk.c_str(), acc.size(), acc.c_str());
         chunk += acc;
         if(chunk.size()) {
             // relative path => get the sysroot prefix prepended
@@ -483,7 +481,7 @@ std::string UserPath(const char* tlate, int mods, GDP get_dep) {
 
         opening_sep = closing_sep + kCsLen;
     }
-
+    (void) uniq.size(); // force existence until here after &-capture
     return out;
 }
 

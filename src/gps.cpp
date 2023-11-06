@@ -22,7 +22,7 @@ namespace
 {
 constexpr int kApplied = fixpre_config_options__reserved_upper_bit;
 std::atomic<int> _options{0};
-const std::string kUndefined;
+const std::string kUndefined{};
 
 void ensure_trailing(std::string& str, char chr) {
     if(str.size() && str.back() != chr) {
@@ -121,7 +121,11 @@ struct PathCache {
 
     /* always under singleton lock and within constructor */
     bool resolve_path(int path_kind) {
-        auto out = OSPathLookup(path_kind, options, [this](int dep) { return mbexisting(dep); });
+        auto out = OSPathLookup(path_kind, options, [this](int dep) -> const std::string& {
+            //const auto& depstr = mbexisting(dep);
+            //_PREFIX_LOG("depstr(%08x)=(%p)%s", dep, depstr.c_str(), depstr.c_str());
+            return mbexisting(dep);
+        });
         auto kind = _PREFIX_ENUM_KNOWN_PATH(path_kind);
         transliterate(out, ';', ':');
         transliterate(out, '\\', '/');
