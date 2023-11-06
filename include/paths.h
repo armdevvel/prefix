@@ -163,16 +163,6 @@ enum fixpre_path_families {
 #define _SUFFIX_PATH_PRE _SUFFIX_PATH_BIN
 #endif
 
-/* Well-known Windows paths. Never localized and can safely be hardcoded. */
-
-#ifndef _SUFFIX_PATH_SYSTEM32
-#define _SUFFIX_PATH_SYSTEM32       "System32"
-#endif
-
-#ifndef _SUFFIX_PATH_SYSWOW64
-#define _SUFFIX_PATH_SYSWOW64       "SysWOW64"
-#endif
-
 /**
  * Now the zoo. Options that differ from each other only by a fixed suffix
  * or modifier flags NEED NOT BE SPECIFIED. Only custom runtime logic that
@@ -375,11 +365,14 @@ const char* fixpre_path(int path_kind_with_optional_modifiers, const char* suffi
  *      the variable effectively a function. The default interpretation, however, is
  *      simply that the trailing suffix will be appended literally.
  * 
+ *      Template variable scanning occurs right-to-left, i.s. $A$tomato$B$potato is,
+ *      effectively, A(tomato + B(potato)).
+ * 
  * 4. The parser expands environment variables after it splits the path template into
  *      components and recognizes template variables. If template variable processing
  *      leads to a registry read, REG_EXPAND_SZ values are expanded using the current
  *      environment block, but are not subject to any further parsing; in other words
- *      (this is another gentle nudge of ours), there's no reason to use path template
+ *     (this is another gentle nudge of ours), there's no reason to use path template
  *      variables in values stored in the registry.
  * 
  * 5. The following template variables are defined:
@@ -398,9 +391,10 @@ const char* fixpre_path(int path_kind_with_optional_modifiers, const char* suffi
  *      $HKCUPATH$              current user %PATH% value (-"-)
  *      $HKDUPATH$              default user %PATH% value (-"-)
  *          Path component splitting occurs after envvar expansion.
+ *          The line preceding the variable is processed separately.
  * 
  *      $WINDIR$sub/di/rectory  same as %windir%sub/di/rectory
- *      $SYSDIR$subdi/rector/y  same as above but relative to "System32"
+ *      $SYSDIR$subdi/rector/y  same as above but relative to system dir (System32)
  *      $PREFIX$subdir/ecto/ry  ...but relative to the distro root
  *      $HOME$su/b/directory    ...to the current user profile
  *      $KNOWN${Music|Pictures|Downloads|...}/subdir
@@ -436,8 +430,14 @@ const char* fixpre_path(int path_kind_with_optional_modifiers, const char* suffi
 #define _PREFIX_DISTRO_STDPATH "TODO"
 #endif
 
-//_PATH_*
-//_PATH_*
+#define _PATH_DEFPATH   fixpre_path(fixpre_known_path__defpath);
+#define _PATH_STDPATH   fixpre_path(fixpre_known_path__stdpath);
+
+#define _PATH_CSHELL    fixpre_path(fixpre_known_path__c_shell);
+
+#define _PATH_DEVNULL   fixpre_path(fixpre_known_path__devnull);
+#define _PATH_TTY       fixpre_path(fixpre_known_path__tty;
+
 //_PATH_*
 // ...
 

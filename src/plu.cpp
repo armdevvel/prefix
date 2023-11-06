@@ -14,6 +14,9 @@
 
 #include <cstdint>
 #include <algorithm>
+#include <utility>
+#include <set>
+#include <map>
 
 #include "def.h"
 #include "dbg.h"
@@ -183,28 +186,63 @@ bool ToDriveLtr(std::string& modpath) {
         || ToDriveLtr_ViaDrivePath(modpath);
 }
 
-/* end of utilities -- the business logic begins */
-
-std::string Dotnet(const std::string& win_dir) {
-    HKEY key;
-    DWORD err = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\.NETFramework", 0, KEY_READ, &key);
-    if(ERROR_SUCCESS == err) {
-        std::string out = RequestVarLen([key](char* buf, std::size_t buflen) {
+/**
+ * path:attr, sep='\\'
+ */
+std::string RegStr(HKEY hive, const std::string& path, const std::string& attr) {
+    const char* cpath = path.c_str();
+    const char* cattr = attr.c_str();
+    HKEY key = hive;
+    DWORD type = REG_SZ;
+    DWORD err = path.size() ? RegOpenKeyExA(hive, cpath, 0, KEY_READ, &key) : ERROR_SUCCESS;
+    if(ERROR_SUCCESS != err) {
+        _PREFIX_LOG("RegOpenKeyExA(%s): err=%lu", cpath, err);
+        return {};
+    } else {
+        std::string out = RequestVarLen([&](char* buf, std::size_t buflen) {
             DWORD len = buflen; // int-to-long
-            DWORD err = RegGetValueA(key, NULL, "InstallRoot", RRF_RT_REG_SZ, NULL, buf, &len);
+            DWORD err = RegGetValueA(key, NULL, cattr, RRF_RT_REG_SZ, &type, buf, &len);
             if(ERROR_SUCCESS == err) {
                 return (std::size_t)len;
             } else {
-                _PREFIX_LOG("RegGetValueA: err=%lu", err);
+                _PREFIX_LOG("RegGetValueA(%s\\%s): err=%lu", cpath, cattr, err);
                 return 0u;
             }
         });
         RegCloseKey(key);
-        return out;
-    } else {
-        _PREFIX_LOG("RegOpenKeyExA: err=%lu", err);
+        return (REG_EXPAND_SZ == type) ? ExpandEnvvars(out.c_str()) : out;
     }
-    return win_dir + "Microsoft.NET/Framework";
+}
+
+/**
+ * <path+attr>, sep=any
+ */
+std::string RegStr(HKEY hive, std::string cp) {
+    std::size_t attrpos = std::string::npos;
+
+    for(std::size_t pos = 0; pos < cp.size(); ++pos) {
+        if(cp[pos] == '/') {
+            cp[pos] = '\\';
+        }
+        if(cp[pos] == '\\') {
+            attrpos = pos;
+        }
+    }
+
+    if(std::string::npos == attrpos) {
+        attrpos = 0; // the entire path is the attribute
+    }
+
+    std::string attr = cp.substr(attrpos + 1);
+    cp.resize(attrpos);
+    return RegStr(hive, cp, attr);
+}
+
+/* end of utilities -- the business logic begins */
+
+std::string Dotnet(const std::string& win_dir) {
+    std::string out = RegStr(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\.NETFramework", "InstallRoot");
+    return out.size() ? out : (win_dir + "Microsoft.NET/Framework");
 }
 
 static bool canary_failed = false; // tried to locate the sysroot but found no
@@ -298,6 +336,157 @@ std::string Cfgroot(int mods, enum fixpre_config_options options, GDP get_dep)
     }
 }
 
+// ****************************************************************** //
+// | path string parser. can later be moved to another source file. | //
+// ****************************************************************** //
+
+struct KnownRegKeys
+{
+    HKEY HKEY_DEFAULT_USER;
+    HKEY HKEY_CUENV;
+    HKEY HKEY_DUENV;
+    HKEY HKEY_LMENV;
+
+    KnownRegKeys() {
+        /* FIXME use "Public" user, not .DEFAULT */
+        assert(ERROR_SUCCESS == RegOpenKeyExA(HKEY_USERS, ".DEFAULT", 0, KEY_READ, &HKEY_DEFAULT_USER));
+        assert(ERROR_SUCCESS == RegOpenKeyExA(HKEY_CURRENT_USER, "Environment", 0, KEY_READ, &HKEY_CUENV));
+        assert(ERROR_SUCCESS == RegOpenKeyExA(HKEY_DEFAULT_USER, "Environment", 0, KEY_READ, &HKEY_DUENV));
+
+        constexpr const char* kLMEnv = "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment";
+        assert(ERROR_SUCCESS == RegOpenKeyExA(HKEY_LOCAL_MACHINE, kLMEnv, 0, KEY_READ, &HKEY_LMENV));
+    }
+
+    ~KnownRegKeys() {
+        RegCloseKey(HKEY_DEFAULT_USER);
+        RegCloseKey(HKEY_CUENV);
+        RegCloseKey(HKEY_DUENV);
+        RegCloseKey(HKEY_LMENV);
+    }
+} krk;
+
+std::string UserPath(const char* tlate, int mods, GDP get_dep) {
+    std::string out;
+    if(!tlate || !*tlate) return out;
+
+    std::set<std::string> uniq;
+    auto post_component = [&](const std::string& component) {
+        _PREFIX_LOG("PATH+=[%u]%s", component.size(), component.c_str());
+        if(component.size() && uniq.emplace(component).second) {
+            if(out.size()) out.push_back('\1');
+            out.append(component);
+        }
+    };
+
+    std::map<std::string, std::function<std::string(const std::string&)>> tagmap;
+    auto maphive = [&tagmap](const char* tag, HKEY hive) {
+        tagmap[tag] = [hive](const std::string& path) { return RegStr(hive, path); }; 
+    };
+    maphive("HKLM", HKEY_LOCAL_MACHINE);
+    maphive("HKCU", HKEY_CURRENT_USER);
+    maphive("HKDU", krk.HKEY_DEFAULT_USER);
+
+    maphive("HKCUENV", krk.HKEY_CUENV);
+    maphive("HKDUENV", krk.HKEY_DUENV);
+    maphive("HKLMENV", krk.HKEY_LMENV);
+
+    auto mappath = [&](const char* tag, HKEY henv) {
+        tagmap[tag] = [&](const std::string& ign) {
+            if(ign.size()) { _PREFIX_LOG("$*PATH$ suffix (%s) ignored", ign.c_str()); }
+            std::string PATH = RegStr(henv, "PATH");
+            std::size_t seppos, eltpos = 0;
+            while(std::string::npos != (seppos = PATH.find(';', eltpos))) {
+                post_component(PATH.substr(eltpos, seppos - eltpos));
+                eltpos = seppos + 1;
+            };
+            post_component(PATH.substr(eltpos));
+            return std::string{};
+        };
+    };
+    mappath("HKCUPATH", krk.HKEY_CUENV);
+    mappath("HKDUPATH", krk.HKEY_DUENV);
+    mappath("HKLMPATH", krk.HKEY_LMENV);
+
+    auto mappend = [&] (const char* tag, enum fixpre_known_path kind) {
+        const int path_kind = mods | kind;
+        tagmap[tag] = [path_kind, get_dep](const std::string& arg) {
+            return get_dep(path_kind) + arg;
+        };
+    };
+    mappend("WINDIR", fixpre_known_path__windows);
+    mappend("SYSDIR", fixpre_known_path__sys_dir);
+    mappend("PREFIX", fixpre_known_path__sysroot);
+    mappend("HOME"  , fixpre_known_path__homedir);
+
+    std::map<std::string, std::pair<int, int>> pubpri;
+    pubpri["Documents"] = {CSIDL_COMMON_DOCUMENTS, CSIDL_MYDOCUMENTS};
+    //pubpri["Downloads"] = {CSIDL_COMMON_DOWNLOADS, CSIDL_MYDOWNLOADS}; // also Desktop?
+    // FIXME migrate to https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid
+    //  use FOLDERID_Desktop, FOLDERID_Downloads
+    pubpri["Pictures"]  = {CSIDL_COMMON_PICTURES,  CSIDL_MYPICTURES};
+    pubpri["Music"]     = {CSIDL_COMMON_MUSIC,     CSIDL_MYMUSIC};
+    pubpri["Videos"]    = {CSIDL_COMMON_VIDEO,     CSIDL_MYVIDEO};
+
+    tagmap["KNOWN"] = [&](const std::string& arg) {
+        const bool is_userdir = mods & fixpre_path_modifiers__profile_dir;
+        std::size_t slash = arg.find('/');
+        if(std::string::npos == slash) {
+            // well, then fall back to ~
+            return tagmap.at("HOME")(arg);
+        } else {
+            std::string kn_name = arg.substr(slash);
+            const auto& pub_pri = pubpri.at(kn_name);
+            return RequestSpecial(is_userdir ? pub_pri.second : pub_pri.first) + arg.substr(slash + 1u);
+        }
+    };
+
+    std::string xtlate = ExpandEnvvars(tlate);
+    xtlate.append(_PREFIX_DISTRO_COMSEP);
+
+    std::size_t kCsLen = strlen(_PREFIX_DISTRO_COMSEP);
+    std::size_t kVtLen = strlen(_PREFIX_DISTRO_VARTAG);
+
+    std::size_t opening_sep = 0u;
+    while(opening_sep < xtlate.size()) {
+        std::size_t closing_sep = xtlate.find(_PREFIX_DISTRO_COMSEP);
+        std::string chunk = xtlate.substr(opening_sep, closing_sep - opening_sep);
+
+        std::size_t tag_endlook = chunk.size();
+        std::size_t opening_tag, closing_tag;
+        std::string acc;
+        // TODO comment
+        while(std::string::npos != (closing_tag = chunk.rfind(_PREFIX_DISTRO_VARTAG, tag_endlook)))
+        {
+            if(std::string::npos != (opening_tag = chunk.rfind(_PREFIX_DISTRO_VARTAG, closing_tag - kVtLen))) {
+                // now there is: <some_part> <OPEN> <tag> <CLOSE> <pre> [ += <acc> ]
+                std::string tag = chunk.substr(opening_tag + kVtLen, closing_tag - (opening_tag + kVtLen));
+                std::string pre = chunk.substr(closing_tag + kVtLen, tag_endlook - (closing_tag + kVtLen));
+                _PREFIX_LOG("acc:=%s(%s+%s)", tag.c_str(), pre.c_str(), acc.c_str());
+                acc = tagmap.at(tag)(pre + acc);
+                tag_endlook = opening_tag - kVtLen;
+            } else {
+                // _PREFIX_ERR() // the reason it's a runtime error is envvar expansion
+                _PREFIX_LOG("error; unmatched %s in %s", _PREFIX_DISTRO_VARTAG, chunk.c_str());
+                acc.clear();
+                tag_endlook = 0;
+                break;
+            }
+        }
+        chunk.resize(tag_endlook);
+        _PREFIX_LOG("%s+=[%u]%s", chunk.c_str(), acc.size(), acc.c_str());
+        chunk += acc;
+        if(chunk.size()) {
+            // relative path => get the sysroot prefix prepended
+            post_component((std::string::npos != chunk.find(':')) ? chunk 
+                    : get_dep(mods | fixpre_known_path__sysroot) + chunk);
+        }
+
+        opening_sep = closing_sep + kCsLen;
+    }
+
+    return out;
+}
+
 // The following options affect post-lookup behavior:
 // fixpre_config_options__tuning_noninvasive (does not affect lookup)
 
@@ -356,8 +545,8 @@ std::string OSPathLookup(int path_kind, enum fixpre_config_options options, GDP 
             return Cfgroot(mods, options, get_dep);
 
         /* lookup paths */
-        case fixpre_known_path__defpath: return "TODO _PATH_DEFPATH";  /* userspace */
-        case fixpre_known_path__stdpath: return "TODO _PATH_STDPATH";  /* servicespace */
+        case fixpre_known_path__defpath: return UserPath(_PREFIX_DISTRO_DEFPATH, mods, get_dep); /* userspace */
+        case fixpre_known_path__stdpath: return UserPath(_PREFIX_DISTRO_STDPATH, mods, get_dep);  /* service space */
 
         /* device paths */
         case fixpre_known_path__devnull: return "nul";

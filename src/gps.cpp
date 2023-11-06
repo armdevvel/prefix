@@ -217,8 +217,8 @@ private:
                         if(pq.kind & fixpre_path_modifiers__native_dsep) {
                             transliterate(cs.out, '/', '\\');
                         }
-                        if(pq.kind & fixpre_path_modifiers__native_psep) {
-                            transliterate(cs.out, ':', ';');
+                        if(fixpre_path_families__binpath == (pq.kind & _PREFIX_PATH_FAMILY_MASK)) {
+                            transliterate(cs.out, '\1', (pq.kind & fixpre_path_modifiers__native_psep) ? ';' : ':');
                         }
                         pq.setResult(cs.err, cs.out, *this);
                     }
