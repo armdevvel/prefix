@@ -334,4 +334,8 @@ const char* fixpre_path(int path_kind, const char* suffix) {
     return pq.cached;
 }
 
+const char* fixpre_base_path(int path_kind) {
+    return fixpre_path(path_kind, "");
+}
+
 } // extern "C"

@@ -335,6 +335,11 @@ const char* fixpre_explain(int path_kind);
 const char* fixpre_path(int path_kind_with_optional_modifiers, const char* suffix);
 
 /**
+ * Shortcut for `fixpre_path(path_kind_with_optional_modifiers, "")`
+ */
+const char* fixpre_base_path(int path_kind_with_optional_modifiers);
+
+/**
  * Toybox uses: _PATH_DEFPATH (all around), _PATH_UTMP (getty); hardcodes _PATH_KLOG.
  * _PATH_STDPATH stays unused. Our policy is to query per-user path from the registry
  *   or environment and then vet (whitelist) components that gets into _PATH_DEFPATH.
@@ -429,13 +434,13 @@ const char* fixpre_path(int path_kind_with_optional_modifiers, const char* suffi
 #define _PREFIX_DISTRO_STDPATH _SUFFIX_PATH_BIN ":" _SUFFIX_PATH_CRT ":$HKDUPATH$:$HKLMPATH$"
 #endif
 
-#define _PATH_DEFPATH   fixpre_path(fixpre_known_path__defpath | fixpre_path_modifiers__native_dsep | fixpre_path_modifiers__profile_dir);
-#define _PATH_STDPATH   fixpre_path(fixpre_known_path__stdpath | fixpre_path_modifiers__native_dsep);
+#define _PATH_DEFPATH   fixpre_base_path(fixpre_known_path__defpath | fixpre_path_modifiers__native_dsep | fixpre_path_modifiers__profile_dir)
+#define _PATH_STDPATH   fixpre_base_path(fixpre_known_path__stdpath | fixpre_path_modifiers__native_dsep)
 
-#define _PATH_CSHELL    fixpre_path(fixpre_known_path__c_shell);
+#define _PATH_CSHELL    fixpre_base_path(fixpre_known_path__c_shell)
 
-#define _PATH_DEVNULL   fixpre_path(fixpre_known_path__devnull);
-#define _PATH_TTY       fixpre_path(fixpre_known_path__tty);
+#define _PATH_DEVNULL   fixpre_base_path(fixpre_known_path__devnull)
+#define _PATH_TTY       fixpre_base_path(fixpre_known_path__tty)
 
 //_PATH_*
 // ...
@@ -461,7 +466,7 @@ namespace fixpre
 {
 
 /** See `fixpre_path` */
-std::string Path(int path_kind_with_optional_modifiers, const std::string& suffix);
+std::string Path(int path_kind_with_optional_modifiers, const std::string& suffix = {});
 
 /** See `fixpre_enumerate_known_base_paths` */
 using OnKnownPath = std::function<void(enum fixpre_known_path, const std::string& value)>;
