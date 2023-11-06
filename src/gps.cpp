@@ -127,7 +127,6 @@ struct PathCache {
             return mbexisting(dep);
         });
         auto kind = _PREFIX_ENUM_KNOWN_PATH(path_kind);
-        transliterate(out, ';', ':');
         transliterate(out, '\\', '/');
         if(fixpre_file_type(path_kind) == S_IFDIR) {
             ensure_trailing(out, '/'); // MOREINFO doesn't work w/TEMP?
@@ -221,9 +220,6 @@ private:
                         if(pq.kind & fixpre_path_modifiers__native_dsep) {
                             transliterate(cs.out, '/', '\\');
                         }
-                        if(fixpre_path_families__binpath == (pq.kind & _PREFIX_PATH_FAMILY_MASK)) {
-                            transliterate(cs.out, '\1', (pq.kind & fixpre_path_modifiers__native_psep) ? ';' : ':');
-                        }
                         pq.setResult(cs.err, cs.out, *this);
                     }
                 } else { // E
@@ -246,8 +242,8 @@ PathCache& path_cache() {
 void PathQuery::setResult(int error_code, const std::string& path_or_msg, PathCache& cache) {
     out = path_or_msg;
     if(!(err = error_code)) {
-        if(_PREFIX_PATH_IS_PATHLIST(kind)) {
-            ensure_trailing(out, (kind & fixpre_path_modifiers__native_psep) ? ';' : ':');
+        if(suffix.size() && _PREFIX_PATH_IS_PATHLIST(kind)) {
+            ensure_trailing(out, ';');
         }
         out.append(suffix);
     } else if(out.empty()) {

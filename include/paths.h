@@ -33,7 +33,6 @@ enum fixpre_path_modifiers {
     /* ...a couple of reserved bits to indicate custom path semantic */
 
     fixpre_path_modifiers__native_dsep = (1 << 27), /* '\\' instead of '/' */
-    fixpre_path_modifiers__native_psep = (1 << 26), /* ';' instead of ':' */
     /* ...a couple of reserved bits to indicate custom path format */
 };
 
@@ -423,11 +422,11 @@ const char* fixpre_path(int path_kind_with_optional_modifiers, const char* suffi
 #endif
 
 #ifndef _PREFIX_DISTRO_DEFPATH
-#define _PREFIX_DISTRO_DEFPATH "TODO"
+#define _PREFIX_DISTRO_DEFPATH "bin:bin/crt:$HKCUPATH$:$HKLMPATH$:$WINDIR$system32:$WINDIR$:$SYSDIR$"
 #endif
 
 #ifndef _PREFIX_DISTRO_STDPATH
-#define _PREFIX_DISTRO_STDPATH "TODO"
+#define _PREFIX_DISTRO_STDPATH "bin:bin/crt:$HKDUPATH$:$HKLMPATH$:$WINDIR$system32:$WINDIR$:$SYSDIR$"
 #endif
 
 #define _PATH_DEFPATH   fixpre_path(fixpre_known_path__defpath);
@@ -436,7 +435,7 @@ const char* fixpre_path(int path_kind_with_optional_modifiers, const char* suffi
 #define _PATH_CSHELL    fixpre_path(fixpre_known_path__c_shell);
 
 #define _PATH_DEVNULL   fixpre_path(fixpre_known_path__devnull);
-#define _PATH_TTY       fixpre_path(fixpre_known_path__tty;
+#define _PATH_TTY       fixpre_path(fixpre_known_path__tty);
 
 //_PATH_*
 // ...

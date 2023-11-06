@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <algorithm>
+#include <cctype>
 #include <utility>
 #include <set>
 #include <map>
@@ -94,6 +95,17 @@ std::string RequestVarLen(TryRequestVarLen try_request_varlen) {
     if(str_len < out_len) out.resize(str_len);
     return out;
 }
+
+// TODO inject locale (see libwusers)
+// std::string RequestKnown(const GUID& guid) {
+//     return RequestMaxLen([&guid](char* buf) {
+//         return ERROR_SUCCESS == SHGetKnownFolderPath(
+//             NULL /*hwnd */, csidl,
+//             NULL /* acc_token */,
+//             SHGFP_TYPE_CURRENT, buf
+//         );
+//     });
+// }
 
 std::string RequestSpecial(int csidl) {
     return RequestMaxLen([csidl](char* buf) {
@@ -194,7 +206,8 @@ std::string RegStr(HKEY hive, const std::string& path, const std::string& attr) 
     const char* cattr = attr.c_str();
     HKEY key = hive;
     DWORD type = REG_SZ;
-    DWORD err = path.size() ? RegOpenKeyExA(hive, cpath, 0, KEY_READ, &key) : ERROR_SUCCESS;
+    const bool tmpkey = path.size();
+    DWORD err = tmpkey ? RegOpenKeyExA(hive, cpath, 0, KEY_READ, &key) : ERROR_SUCCESS;
     if(ERROR_SUCCESS != err) {
         _PREFIX_LOG("RegOpenKeyExA(%s): err=%lu", cpath, err);
         return {};
@@ -205,11 +218,11 @@ std::string RegStr(HKEY hive, const std::string& path, const std::string& attr) 
             if(ERROR_SUCCESS == err) {
                 return (std::size_t)len;
             } else {
-                _PREFIX_LOG("RegGetValueA(%s\\%s): err=%lu", cpath, cattr, err);
+                _PREFIX_LOG("RegGetValueA(%s, %s): err=%lu", cpath, cattr, err);
                 return 0u;
             }
         });
-        RegCloseKey(key);
+        if(tmpkey) RegCloseKey(key);
         return (REG_EXPAND_SZ == type) ? ExpandEnvvars(out.c_str()) : out;
     }
 }
@@ -230,12 +243,12 @@ std::string RegStr(HKEY hive, std::string cp) {
     }
 
     if(std::string::npos == attrpos) {
-        attrpos = 0; // the entire path is the attribute
+        return RegStr(hive, "", cp);
+    } else {
+        std::string attr = cp.substr(attrpos + 1);
+        cp.resize(attrpos);
+        return RegStr(hive, cp, attr);
     }
-
-    std::string attr = cp.substr(attrpos + 1);
-    cp.resize(attrpos);
-    return RegStr(hive, cp, attr);
 }
 
 /* end of utilities -- the business logic begins */
@@ -370,10 +383,17 @@ std::string UserPath(const char* tlate, int mods, GDP get_dep) {
     if(!tlate || !*tlate) return out;
 
     std::set<std::string> uniq;
-    auto post_component = [&out, &uniq](const std::string& component) {
-        if(component.size() && uniq.emplace(component).second) {
-            if(out.size()) out.push_back('\1');
-            out.append(component);
+    auto post_component = [&out, &uniq](std::string component) {
+        if(component.size()) {
+            for(auto& c : component) if('\\'==c) c = '/';
+            while(component.back() == '/') component.pop_back();
+            std::string canonical = component;
+            for(auto& c : canonical) c = std::tolower(c);
+            if(uniq.emplace(canonical).second) {
+                if(out.size()) out.push_back(';');
+                out.append(component);
+                if(out.back() != '/') out.push_back('/');
+            }
         }
     };
 
@@ -419,7 +439,7 @@ std::string UserPath(const char* tlate, int mods, GDP get_dep) {
 
     std::map<std::string, std::pair<int, int>> folders;
     folders["Documents"] = {CSIDL_COMMON_DOCUMENTS, CSIDL_MYDOCUMENTS};
-    //folders["Downloads"] = {CSIDL_COMMON_DOWNLOADS, CSIDL_MYDOWNLOADS}; // also Desktop?
+    // folders["Downloads"] = {CSIDL_COMMON_DOWNLOADS, CSIDL_MYDOWNLOADS}; // also Desktop?
     // FIXME migrate to https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid
     //  use FOLDERID_Desktop, FOLDERID_Downloads
     folders["Pictures"]  = {CSIDL_COMMON_PICTURES,  CSIDL_MYPICTURES};
@@ -442,36 +462,33 @@ std::string UserPath(const char* tlate, int mods, GDP get_dep) {
     std::string xtlate = ExpandEnvvars(tlate);
     xtlate.append(_PREFIX_DISTRO_COMSEP);
 
-    std::size_t kCsLen = strlen(_PREFIX_DISTRO_COMSEP);
-    std::size_t kVtLen = strlen(_PREFIX_DISTRO_VARTAG);
+    const std::size_t kCsLen = strlen(_PREFIX_DISTRO_COMSEP);
+    const std::size_t kVtLen = strlen(_PREFIX_DISTRO_VARTAG);
+    const std::size_t k2VtLen = kVtLen << 1;
 
     std::size_t opening_sep = 0u;
     while(opening_sep < xtlate.size()) {
-        std::size_t closing_sep = xtlate.find(_PREFIX_DISTRO_COMSEP);
+        std::size_t closing_sep = xtlate.find(_PREFIX_DISTRO_COMSEP, opening_sep);
         std::string chunk = xtlate.substr(opening_sep, closing_sep - opening_sep);
 
-        std::size_t tag_endlook = chunk.size();
-        std::size_t opening_tag, closing_tag;
+        std::size_t opening_tag = chunk.size(), closing_tag;
         std::string acc;
-        // TODO comment
-        while(std::string::npos != (closing_tag = chunk.rfind(_PREFIX_DISTRO_VARTAG, tag_endlook)))
-        {
-            if(std::string::npos != (opening_tag = chunk.rfind(_PREFIX_DISTRO_VARTAG, closing_tag - kVtLen))) {
+
+        while(opening_tag >= k2VtLen && std::string::npos != (closing_tag = chunk.rfind(_PREFIX_DISTRO_VARTAG, opening_tag - kVtLen))) {
+            if(closing_tag >= kVtLen && std::string::npos != (opening_tag = chunk.rfind(_PREFIX_DISTRO_VARTAG, closing_tag - kVtLen))) {
                 // now there is: <some_part> <OPEN> <tag> <CLOSE> <pre> [ += <acc> ]
                 std::string tag = chunk.substr(opening_tag + kVtLen, closing_tag - (opening_tag + kVtLen));
-                std::string pre = chunk.substr(closing_tag + kVtLen, tag_endlook - (closing_tag + kVtLen));
-                _PREFIX_LOG("acc:=%s(%s+%s)", tag.c_str(), pre.c_str(), acc.c_str());
+                std::string pre = chunk.substr(closing_tag + kVtLen);
                 acc = tagmap.at(tag)(pre + acc);
-                tag_endlook = opening_tag - kVtLen;
+                chunk.resize(opening_tag);
             } else {
                 // _PREFIX_ERR() // the reason it's a runtime error is envvar expansion
                 _PREFIX_LOG("error; unmatched %s in %s", _PREFIX_DISTRO_VARTAG, chunk.c_str());
+                chunk.clear();
                 acc.clear();
-                tag_endlook = 0;
                 break;
             }
         }
-        chunk.resize(tag_endlook);
         chunk += acc;
         if(chunk.size()) {
             // relative path => get the sysroot prefix prepended
