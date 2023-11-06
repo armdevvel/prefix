@@ -422,15 +422,15 @@ const char* fixpre_path(int path_kind_with_optional_modifiers, const char* suffi
 #endif
 
 #ifndef _PREFIX_DISTRO_DEFPATH
-#define _PREFIX_DISTRO_DEFPATH "bin:bin/crt:$HKCUPATH$:$HKLMPATH$:$WINDIR$system32:$WINDIR$:$SYSDIR$"
+#define _PREFIX_DISTRO_DEFPATH _SUFFIX_PATH_BIN ":" _SUFFIX_PATH_CRT ":$HKCUPATH$:$HKLMPATH$"
 #endif
 
 #ifndef _PREFIX_DISTRO_STDPATH
-#define _PREFIX_DISTRO_STDPATH "bin:bin/crt:$HKDUPATH$:$HKLMPATH$:$WINDIR$system32:$WINDIR$:$SYSDIR$"
+#define _PREFIX_DISTRO_STDPATH _SUFFIX_PATH_BIN ":" _SUFFIX_PATH_CRT ":$HKDUPATH$:$HKLMPATH$"
 #endif
 
-#define _PATH_DEFPATH   fixpre_path(fixpre_known_path__defpath);
-#define _PATH_STDPATH   fixpre_path(fixpre_known_path__stdpath);
+#define _PATH_DEFPATH   fixpre_path(fixpre_known_path__defpath | fixpre_path_modifiers__native_dsep | fixpre_path_modifiers__profile_dir);
+#define _PATH_STDPATH   fixpre_path(fixpre_known_path__stdpath | fixpre_path_modifiers__native_dsep);
 
 #define _PATH_CSHELL    fixpre_path(fixpre_known_path__c_shell);
 
